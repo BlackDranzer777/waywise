@@ -1,0 +1,127 @@
+import arcpy
+import numpy as np
+from skimage import io
+from skimage import exposure
+from matplotlib import pyplot as plt
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
+import heapq
+
+# Get parameters from ArcGIS
+image_path = arcpy.GetParameterAsText(0)  # Input image path
+water_points = arcpy.GetParameterAsText(1)  # Water points file
+builtup_points = arcpy.GetParameterAsText(2)  # Built-up points file
+lveg_points = arcpy.GetParameterAsText(3)  # Low vegetation points file
+trees_points = arcpy.GetParameterAsText(4)  # Trees points file
+test_points = arcpy.GetParameterAsText(5)  # Test points file
+start_point = tuple(map(int, arcpy.GetParameterAsText(6).split(',')))  # Start point (x, y)
+end_point = tuple(map(int, arcpy.GetParameterAsText(7).split(',')))  # End point (x, y)
+
+# Load images
+coll = io.ImageCollection(image_path)
+
+# Visualisation of the image
+im_comp = np.dstack([coll[3], coll[2], coll[1]])
+
+# Color composition
+im_comp = np.dstack([coll[3] / coll[3].max(), coll[2] / coll[2].max(), coll[1] / coll[1].max()])
+
+# Histogram equalization
+for i in range(3):
+    v_min, v_max = np.percentile(im_comp[:, :, i], (1, 98))
+    im_comp[:, :, i] = exposure.rescale_intensity(im_comp[:, :, i], in_range=(v_min, v_max))
+
+# Load training data
+p_water = np.loadtxt(water_points, dtype='int')
+p_builtup = np.loadtxt(builtup_points, dtype='int')
+p_lveg = np.loadtxt(lveg_points, dtype='int')
+p_trees = np.loadtxt(trees_points, dtype='int')
+
+# Function to compute cost map (example: higher cost for built-up areas)
+def compute_cost_map(image):
+    cost_map = np.ones(image.shape[:2], dtype=float)
+    cost_map[p_builtup[:, 0], p_builtup[:, 1]] = 10  # Example: built-up areas are 10x more costly
+    cost_map[p_water[:, 0], p_water[:, 1]] = 5      # Example: water areas are 5x more costly
+    cost_map[p_lveg[:, 0], p_lveg[:, 1]] = 2        # Example: low vegetation areas are 2x more costly
+    cost_map[p_trees[:, 0], p_trees[:, 1]] = 1      # Example: trees areas have base cost
+    return cost_map
+
+cost_map = compute_cost_map(im_comp)
+
+# Implementing Dijkstra's algorithm to find the shortest path
+def dijkstra_shortest_path(cost_map, start, end):
+    rows, cols = cost_map.shape
+    graph = {}
+    
+    def add_edge(graph, u, v, weight):
+        if u in graph:
+            graph[u].append((weight, v))
+        else:
+            graph[u] = [(weight, v)]
+    
+    # Build graph from cost map
+    for i in range(rows):
+        for j in range(cols):
+            if i > 0:  # Up
+                add_edge(graph, (i, j), (i-1, j), cost_map[i-1, j])
+            if i < rows - 1:  # Down
+                add_edge(graph, (i, j), (i+1, j), cost_map[i+1, j])
+            if j > 0:  # Left
+                add_edge(graph, (i, j), (i, j-1), cost_map[i, j-1])
+            if j < cols - 1:  # Right
+                add_edge(graph, (i, j), (i, j+1), cost_map[i, j+1])
+    
+    # Priority queue for Dijkstra's algorithm
+    priority_queue = [(0, start)]
+    distances = {start: 0}
+    predecessors = {start: None}
+    
+    while priority_queue:
+        current_distance, current_vertex = heapq.heappop(priority_queue)
+        
+        if current_vertex == end:
+            break
+        
+        if current_distance > distances.get(current_vertex, float('inf')):
+            continue
+        
+        for weight, neighbor in graph.get(current_vertex, []):
+            distance = current_distance + weight
+            if distance < distances.get(neighbor, float('inf')):
+                distances[neighbor] = distance
+                heapq.heappush(priority_queue, (distance, neighbor))
+                predecessors[neighbor] = current_vertex
+    
+    # Reconstruct the path
+    path = []
+    step = end
+    while step is not None:
+        path.append(step)
+        step = predecessors.get(step)
+    path.reverse()
+    
+    return path, distances.get(end, float('inf'))
+
+# Run Dijkstra's algorithm
+path, total_cost = dijkstra_shortest_path(cost_map, start_point, end_point)
+
+# Visualize the path
+path_coords = np.array(path)
+plt.imshow(cost_map, cmap='gray')
+plt.plot(path_coords[:, 1], path_coords[:, 0], 'r')
+plt.scatter([start_point[1]], [start_point[0]], c='green')
+plt.scatter([end_point[1]], [end_point[0]], c='blue')
+plt.title(f"Shortest Path from {start_point} to {end_point} with Cost {total_cost}")
+plt.show()
+
+# Print the path
+arcpy.AddMessage(f"Path: {path}")
+arcpy.AddMessage(f"Total Cost: {total_cost}")
+
+# Original image
+plt.figure(figsize=(20, 10))
+plt.imshow(im_comp)
+plt.title("Original Image")
+plt.show()
+
+# Continue with the rest of your supervised classification logic here...
