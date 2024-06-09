@@ -2,8 +2,10 @@ from collections import deque
 import heapq
 
 def dijkstra(graph, start):
-    # Initialize distances with infinity and the start node distance with 0
-    distances = {node: float('inf') for node in graph}
+    # Initialize distances with infinity
+    distances = {}
+    for node in graph:
+        distances[node] = float('inf')
     distances[start] = 0
     
     # Priority queue to hold nodes to visit
@@ -17,7 +19,8 @@ def dijkstra(graph, start):
             continue
         
         # Explore neighbors
-        for neighbor, weight in graph[current_node].items():
+        for neighbor in graph[current_node]:
+            weight = graph[current_node][neighbor]
             distance = current_distance + weight
             
             # Only consider this new path if it's better
